@@ -1,25 +1,27 @@
-# ======================================================
-# 💼 DAY 5: AI SALES DEVELOPMENT REP (SDR) - SALESFORCE RECEPTIONIST
-# 👩‍💼 "Priya" - Salesforce Receptionist & Lead Capture Agent
-# 🚀 Features: FAQ Retrieval, Lead Qualification, JSON Database
-# ======================================================
+"""
+Cleaned, updated voice-commerce agent for "Namkha Mountain Traders" — a small ACP-inspired voice shopping assistant.
+- Shop persona: Tibetan-flavored mountain shop selling shawls, blankets, yak-wool goods, mugs, hoodies, etc.
+- Compact merchant layer (catalog, orders persistence).
+- LLM-exposed function tools: show_catalog, add_to_cart, show_cart, clear_cart, place_order, last_order.
 
-import logging
+Notes:
+- This file is adapted from the sample you provided and cleaned for clarity.
+- Shop introduction and persona updated to the Tibetan-flavored shop name and story.
+"""
+
 import json
+import logging
 import os
-import asyncio
+import uuid
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Annotated, Optional
-from dataclasses import dataclass, asdict
+from typing import List, Dict, Optional
 
-print("\n" + "💼" * 50)
-print("🚀 AI SDR AGENT - DAY 5 TUTORIAL (SALESFORCE RECEPTIONIST)")
-print("📚 REPRESENTING: Salesforce (Receptionist Persona)")
-print("💡 agent.py LOADED SUCCESSFULLY!")
-print("💼" * 50 + "\n")
-
-from dotenv import load_dotenv
 from pydantic import Field
+from dotenv import load_dotenv
+
+# Placeholder imports for the livekit agent framework and plugins used in your sample.
+# Keep these if you will run in the same environment; otherwise adapt to your runtime.
 from livekit.agents import (
     Agent,
     AgentSession,
@@ -31,255 +33,528 @@ from livekit.agents import (
     function_tool,
     RunContext,
 )
-
-# 🔌 PLUGINS (kept same as example)
 from livekit.plugins import murf, silero, google, deepgram, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
-logger = logging.getLogger("agent")
+# -------------------------
+# Logging
+# -------------------------
+logger = logging.getLogger("namkha_shop")
+logger.setLevel(logging.INFO)
+handler = logging.StreamHandler()
+handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+logger.addHandler(handler)
+
 load_dotenv(".env.local")
 
-# ======================================================
-# 📂 1. KNOWLEDGE BASE (FAQ) - now for Salesforce
-# ======================================================
+# -------------------------
+# Shop Identity (Tibetan-flavored)
+# -------------------------
+SHOP_NAME = "Namkha Mountain Traders"
+SHOP_INTRO = (
+    f"{SHOP_NAME} — an ancient mountain emporium sitting on high passes for generations. "
+    "Locals and travellers alike come here for yak-wool shawls, heavy blankets, hand-spun caps, "
+    "and other goods made for life in the mountains. I'm your friendly shopkeeper — I help you browse, "
+    "add items to a cart and place simple orders."
+)
 
-FAQ_FILE = "salesforce_faq.json"
-LEADS_FILE = "salesforce_leads_db.json"
-
-DEFAULT_FAQ = [
+# -------------------------
+# Product Catalog (mountain goods + a few everyday items)
+# -------------------------
+CATALOG: List[Dict] = [
+    # Wool & mountain textiles
     {
-        "question": "What does Salesforce do?",
-        "answer": "Salesforce is a leading customer relationship management (CRM) platform that helps companies manage sales, service, marketing, commerce, and data in one place. Key products include Sales Cloud, Service Cloud, Marketing Cloud, Commerce Cloud, and the Salesforce Platform for building custom apps."
+        "id": "shawl-001",
+        "name": "Yak Wool Shawl",
+        "description": "Thick handwoven yak-wool shawl — warm and breathable for high-altitude cold.",
+        "price": 2499,
+        "currency": "INR",
+        "category": "shawl",
+        "color": "natural",
+        "sizes": ["One-size"],
     },
     {
-        "question": "Who is Salesforce for?",
-        "answer": "Salesforce serves businesses of all sizes — from small startups to large enterprises — across many industries looking to centralize customer data, automate processes, and deliver personalized customer experiences."
+        "id": "blanket-001",
+        "name": "Handloom Mountain Blanket",
+        "description": "Heavy woven blanket for cold nights; traditional mountain pattern.",
+        "price": 3999,
+        "currency": "INR",
+        "category": "blanket",
+        "color": "maroon",
+        "sizes": ["Queen", "King"],
     },
     {
-        "question": "Do you offer a free tier or trial?",
-        "answer": "Salesforce provides free trials for many of its products so teams can evaluate features. For ongoing usage, Salesforce offers multiple editions with different feature sets and pricing; we recommend trying a free trial or contacting our sales team for details."
+        "id": "cap-001",
+        "name": "Hand-spun Wool Cap",
+        "description": "Compact wool cap, keeps ears warm on windy passes.",
+        "price": 499,
+        "currency": "INR",
+        "category": "cap",
+        "color": "black",
+        "sizes": ["S", "M", "L"],
     },
     {
-        "question": "What are the basic pricing options?",
-        "answer": "Pricing varies by product and edition (for example, Sales Cloud editions differ by feature set). Exact pricing depends on the product, edition, number of users, and any add-ons. For accurate pricing, contact Salesforce sales or request a quote."
+        "id": "glove-001",
+        "name": "Insulated Wool Gloves",
+        "description": "Wool-lined gloves with durable stitching for hiking and chores.",
+        "price": 699,
+        "currency": "INR",
+        "category": "gloves",
+        "color": "brown",
+        "sizes": ["M", "L"],
+    },
+    # Everyday / souvenir items
+    {
+        "id": "mug-001",
+        "name": "Stoneware Chai Mug",
+        "description": "Hand-glazed ceramic mug perfect for hot tea after a long day.",
+        "price": 299,
+        "currency": "INR",
+        "category": "mug",
+        "color": "blue",
+        "sizes": [],
     },
     {
-        "question": "Can Salesforce integrate with our existing systems?",
-        "answer": "Yes—Salesforce provides extensive integration capabilities via APIs, MuleSoft, AppExchange apps, and prebuilt connectors to integrate with ERP systems, marketing tools, data warehouses, and more."
+        "id": "tee-001",
+        "name": "Mountain Cotton Tee",
+        "description": "Comfort-fit cotton t-shirt with a small mountain motif.",
+        "price": 799,
+        "currency": "INR",
+        "category": "tshirt",
+        "color": "olive",
+        "sizes": ["S", "M", "L", "XL"],
     },
     {
-        "question": "Can we customize Salesforce for our business?",
-        "answer": "Absolutely—Salesforce is highly customizable with point-and-click tools (Flows, Process Builder), declarative configuration, and programmatic customization via Apex, Lightning Web Components, and APIs."
+        "id": "hoodie-001",
+        "name": "Cozy Mountain Hoodie",
+        "description": "Fleece-lined pullover hoodie for chilly mornings.",
+        "price": 1499,
+        "currency": "INR",
+        "category": "hoodie",
+        "color": "grey",
+        "sizes": ["M", "L", "XL"],
     },
-    {
-        "question": "Do you offer support and training?",
-        "answer": "Salesforce offers a range of support plans and training options including Trailhead (free learning platform), certification programs, partner-led training, and paid support tiers."
-    }
 ]
 
-def load_knowledge_base():
-    """Generates FAQ file if missing, then loads it."""
+# -------------------------
+# Orders persistence
+# -------------------------
+ORDERS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "orders.json")
+try:
+    if not os.path.exists(ORDERS_FILE):
+        with open(ORDERS_FILE, "w") as f:
+            json.dump([], f)
+except Exception as e:
+    logger.error(f"Unable to initialize orders file at {ORDERS_FILE}: {e}")
+
+
+def _load_all_orders() -> List[Dict]:
     try:
-        # Use directory relative to this file so saving/reading works when copied
-        base_dir = os.path.dirname(__file__)
-        path = os.path.join(base_dir, FAQ_FILE)
-        if not os.path.exists(path):
-            with open(path, "w", encoding='utf-8') as f:
-                json.dump(DEFAULT_FAQ, f, indent=4)
-        with open(path, "r", encoding='utf-8') as f:
-            # Return the faq content as a string (for including in prompt instructions)
-            return json.dumps(json.load(f))
+        with open(ORDERS_FILE, "r") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def _save_order(order: Dict):
+    orders = _load_all_orders()
+    orders.append(order)
+    temp_path = ORDERS_FILE + ".tmp"
+    try:
+        with open(temp_path, "w") as f:
+            json.dump(orders, f, indent=2)
+        os.replace(temp_path, ORDERS_FILE)
     except Exception as e:
-        print(f"⚠️ Error loading FAQ: {e}")
-        return ""
+        logger.error(f"Failed to persist order to {ORDERS_FILE}: {e}")
+        # best-effort cleanup
+        try:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+        except Exception:
+            pass
+        raise
 
-SALESFORCE_FAQ_TEXT = load_knowledge_base()
-
-# ======================================================
-# 💾 2. LEAD DATA STRUCTURE
-# ======================================================
-
-@dataclass
-class LeadProfile:
-    name: Optional[str] = None
-    company: Optional[str] = None
-    email: Optional[str] = None
-    role: Optional[str] = None
-    use_case: Optional[str] = None
-    team_size: Optional[str] = None
-    timeline: Optional[str] = None
-
-    def is_qualified(self):
-        """Returns True if we have the minimum info (Name + Email + Use Case)"""
-        return all([self.name, self.email, self.use_case])
-
+# -------------------------
+# Session userdata
+# -------------------------
 @dataclass
 class Userdata:
-    lead_profile: LeadProfile
+    customer_name: Optional[str] = None
+    session_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    started_at: str = field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
+    cart: List[Dict] = field(default_factory=list)
+    orders: List[Dict] = field(default_factory=list)
+    history: List[Dict] = field(default_factory=list)
 
-# ======================================================
-# 🛠️ 3. SDR TOOLS
-# ======================================================
+# -------------------------
+# Merchant helpers
+# -------------------------
+
+def list_products(filters: Optional[Dict] = None) -> List[Dict]:
+    """Simple filtering by category, max_price, color, size or free text query."""
+    filters = filters or {}
+    q = (filters.get("q") or "").lower()
+    category = (filters.get("category") or "").lower()
+    max_price = filters.get("max_price")
+    color = (filters.get("color") or "").lower()
+    size = (filters.get("size") or "")
+
+    results = []
+    for p in CATALOG:
+        ok = True
+        if category and category not in p.get("category", "").lower():
+            ok = False
+        if max_price is not None:
+            try:
+                if p.get("price", 0) > int(max_price):
+                    ok = False
+            except Exception:
+                pass
+        if color and p.get("color") and color != p.get("color").lower():
+            ok = False
+        if size and (not p.get("sizes") or size not in p.get("sizes", [])):
+            ok = False
+        if q:
+            # match against name, description, or category
+            name_match = q in p.get("name", "").lower()
+            desc_match = q in p.get("description", "").lower()
+            cat_match = q in p.get("category", "").lower()
+            if not (name_match or desc_match or cat_match):
+                ok = False
+        if ok:
+            results.append(p)
+    return results
+
+
+def resolve_product_reference(ref_text: str, candidates: Optional[List[Dict]] = None) -> Optional[Dict]:
+    """Resolve a spoken reference like 'second shawl' or 'shawl-001' to a product.
+    Heuristics: ordinals, id exact match, color+category, category match, name substring, numeric index.
+    """
+    if not ref_text:
+        return None
+    ref = ref_text.lower().strip()
+    cand = candidates if candidates is not None else CATALOG
+
+    # ordinal words
+    ordinals = {"first": 0, "second": 1, "third": 2, "fourth": 3}
+    for word, idx in ordinals.items():
+        if word in ref and idx < len(cand):
+            return cand[idx]
+
+    # id exact match
+    for p in cand:
+        if p["id"].lower() == ref:
+            return p
+
+    # color + category match
+    for p in cand:
+        if p.get("color") and p["color"].lower() in ref and p.get("category") and p["category"] in ref:
+            return p
+
+    # category match (e.g., "gloves" -> matches category "gloves")
+    tokens = [t for t in ref.split() if len(t) > 2]
+    for p in cand:
+        if p.get("category") and p["category"].lower() in ref:
+            return p
+
+    # numeric index like '2' -> second
+    for token in ref.split():
+        if token.isdigit():
+            idx = int(token) - 1
+            if 0 <= idx < len(cand):
+                return cand[idx]
+
+    # name substring match (require tokens >2 chars to avoid stop words)
+    for p in cand:
+        name = p.get("name", "").lower()
+        if all(tok in name for tok in tokens):
+            return p
+
+    # fallback: match any token in name
+    for p in cand:
+        for tok in tokens:
+            if tok in p.get("name", "").lower():
+                return p
+
+    return None
+
+
+def create_order_object(line_items: List[Dict], currency: str = "INR") -> Dict:
+    items = []
+    total = 0
+    for li in line_items:
+        pid = li.get("product_id")
+        qty = int(li.get("quantity", 1))
+        prod = next((p for p in CATALOG if p["id"] == pid), None)
+        if not prod:
+            raise ValueError(f"Product {pid} not found")
+        line_total = prod["price"] * qty
+        total += line_total
+        items.append({
+            "product_id": pid,
+            "name": prod["name"],
+            "unit_price": prod["price"],
+            "quantity": qty,
+            "line_total": line_total,
+            "attrs": li.get("attrs", {}),
+        })
+    order = {
+        "id": f"order-{str(uuid.uuid4())[:8]}",
+        "items": items,
+        "total": total,
+        "currency": currency,
+        "created_at": datetime.utcnow().isoformat() + "Z",
+    }
+    try:
+        _save_order(order)
+    except Exception:
+        # let caller decide how to handle; surface the error upward
+        raise
+    return order
+
+
+def get_most_recent_order() -> Optional[Dict]:
+    all_orders = _load_all_orders()
+    if not all_orders:
+        return None
+    return all_orders[-1]
+
+# -------------------------
+# Tools exposed to LLM
+# -------------------------
+@function_tool
+async def show_catalog(
+    ctx: RunContext[Userdata],
+    q: Optional[str] = Field(default=None, description="Search query to find products. Use this when customer asks for a product by name or type (e.g., 'gloves', 'wool shawl', 'mug'). This searches product names, descriptions, and categories."),
+    category: Optional[str] = Field(default=None, description="Filter by product category. Use when customer mentions a product type (e.g., 'gloves', 'shawl', 'blanket', 'mug', 'tshirt', 'hoodie')."),
+    max_price: Optional[int] = Field(default=None, description="Maximum price filter (optional)"),
+    color: Optional[str] = Field(default=None, description="Color filter (optional)"),
+) -> str:
+    """Show the product catalog. This is your PRIMARY tool for accessing products.
+    ALWAYS call this function when a customer:
+    - Asks for a product (e.g., "give me gloves", "I want gloves", "order gloves")
+    - Wants to browse or see what's available
+    - Mentions a product name or type
+    
+    You can call it with no parameters to show all products, or with q/category to filter.
+    """
+    userdata = ctx.userdata
+    # normalize simple synonyms for category
+    if category:
+        cat = category.lower()
+        if cat in ("tee", "tshirt", "t-shirts", "tees"):
+            category = "tshirt"
+        elif cat in ("glove", "gloves"):
+            category = "gloves"
+    
+    # If query is "gloves" or similar, also try category search
+    if q:
+        q_lower = q.lower().strip()
+        # Normalize common product queries to categories
+        if q_lower in ("glove", "gloves"):
+            # Try both q and category
+            filters_q = {k: v for k, v in {"q": q, "max_price": max_price, "color": color}.items() if v is not None}
+            filters_cat = {k: v for k, v in {"category": "gloves", "max_price": max_price, "color": color}.items() if v is not None}
+            prods_q = list_products(filters_q)
+            prods_cat = list_products(filters_cat)
+            # Combine and deduplicate
+            prods = list({p["id"]: p for p in prods_q + prods_cat}.values())
+        elif q_lower in ("tee", "tshirt", "t-shirts", "tees"):
+            filters_q = {k: v for k, v in {"q": q, "max_price": max_price, "color": color}.items() if v is not None}
+            filters_cat = {k: v for k, v in {"category": "tshirt", "max_price": max_price, "color": color}.items() if v is not None}
+            prods_q = list_products(filters_q)
+            prods_cat = list_products(filters_cat)
+            prods = list({p["id"]: p for p in prods_q + prods_cat}.values())
+        else:
+            filters = {k: v for k, v in {"q": q, "category": category, "max_price": max_price, "color": color}.items() if v is not None}
+            prods = list_products(filters)
+    elif category:
+        filters = {k: v for k, v in {"category": category, "max_price": max_price, "color": color}.items() if v is not None}
+        prods = list_products(filters)
+    elif max_price is not None or color:
+        filters = {k: v for k, v in {"max_price": max_price, "color": color}.items() if v is not None}
+        prods = list_products(filters)
+    else:
+        # No filters - show all products
+        prods = CATALOG
+    
+    if not prods:
+        return "Sorry — I couldn't find any items that match. Would you like to try another search?"
+    lines = [f"{SHOP_NAME}: Here are the top {min(8, len(prods))} items I found:"]
+    for idx, p in enumerate(prods[:8], start=1):
+        size_info = f" (sizes: {', '.join(p['sizes'])})" if p.get('sizes') else ""
+        lines.append(f"{idx}. {p['name']} — {p['price']} {p['currency']} (id: {p['id']}){size_info}")
+    lines.append("You can say: 'Add the second item to my cart' or 'add glove-001 to my cart, quantity 2'.")
+    return "\n".join(lines)
+
 
 @function_tool
-async def update_lead_profile(
+async def add_to_cart(
     ctx: RunContext[Userdata],
-    name: Annotated[Optional[str], Field(description="Customer's name")] = None,
-    company: Annotated[Optional[str], Field(description="Customer's company name")] = None,
-    email: Annotated[Optional[str], Field(description="Customer's email address")] = None,
-    role: Annotated[Optional[str], Field(description="Customer's job title")] = None,
-    use_case: Annotated[Optional[str], Field(description="What they want to build or use Salesforce for")] = None,
-    team_size: Annotated[Optional[str], Field(description="Number of people in their team")] = None,
-    timeline: Annotated[Optional[str], Field(description="When they want to start (e.g., Now, next month)")] = None,
+    product_ref: str = Field(..., description="Product reference: product id (e.g., 'glove-001'), product name, category name (e.g., 'gloves'), or spoken reference like 'the gloves'"),
+    quantity: int = Field(default=1, description="Quantity to add"),
+    size: Optional[str] = Field(default=None, description="Size if applicable (optional)"),
 ) -> str:
+    """Add a product to the customer's shopping cart. Use this after showing the catalog.
+    If the product isn't found, suggest calling show_catalog first.
     """
-    ✍️ Captures lead details provided by the user during conversation.
-    Only call this when the user explicitly provides information.
-    """
-    profile = ctx.userdata.lead_profile
+    userdata = ctx.userdata
+    prod = resolve_product_reference(product_ref)
+    if not prod:
+        # Try searching catalog by category or query first
+        search_results = list_products({"q": product_ref})
+        if not search_results:
+            search_results = list_products({"category": product_ref})
+        if search_results:
+            return f"I found {len(search_results)} matching product(s). Please say 'show catalog' with category '{product_ref}' to see them, or be more specific with the product name or id."
+        return f"I couldn't find a product matching '{product_ref}'. Try saying 'show catalog' to browse available items, or use a specific product id (like 'glove-001')."
+    userdata.cart.append({
+        "product_id": prod["id"],
+        "quantity": int(quantity),
+        "attrs": {"size": size} if size else {},
+    })
+    userdata.history.append({"time": datetime.utcnow().isoformat() + "Z", "action": "add_to_cart", "product_id": prod["id"], "quantity": int(quantity)})
+    return f"Added {quantity} x {prod['name']} to your cart. What would you like to do next?"
 
-    # Update only fields that are provided (not None)
-    if name: profile.name = name
-    if company: profile.company = company
-    if email: profile.email = email
-    if role: profile.role = role
-    if use_case: profile.use_case = use_case
-    if team_size: profile.team_size = team_size
-    if timeline: profile.timeline = timeline
-
-    print(f"📝 UPDATING LEAD: {profile}")
-    return "Lead profile updated. Continue the conversation."
 
 @function_tool
-async def submit_lead_and_end(
-    ctx: RunContext[Userdata],
-) -> str:
-    """
-    💾 Saves the lead to the database and signals the end of the call.
-    Call this when the user says goodbye or 'that's all'.
-    """
-    profile = ctx.userdata.lead_profile
+async def show_cart(ctx: RunContext[Userdata]) -> str:
+    userdata = ctx.userdata
+    if not userdata.cart:
+        return "Your cart is empty. Say 'show catalog' to browse items."
+    lines = ["Items in your cart:"]
+    total = 0
+    for li in userdata.cart:
+        p = next((x for x in CATALOG if x["id"] == li["product_id"]), None)
+        if not p:
+            continue
+        line_total = p["price"] * li.get("quantity", 1)
+        total += line_total
+        sz = li.get("attrs", {}).get("size")
+        sz_text = f", size {sz}" if sz else ""
+        lines.append(f"- {p['name']} x {li['quantity']}{sz_text}: {line_total} {p['currency']}")
+    lines.append(f"Cart total: {total} {CATALOG[0]['currency'] if CATALOG else 'INR'}")
+    lines.append("Say 'place my order' to checkout or 'clear cart' to empty the cart.")
+    return "\n".join(lines)
 
-    # Save to JSON file (Append mode)
-    base_dir = os.path.dirname(__file__)
-    db_path = os.path.join(base_dir, LEADS_FILE)
 
-    entry = asdict(profile)
-    entry["timestamp"] = datetime.now().isoformat()
+@function_tool
+async def clear_cart(ctx: RunContext[Userdata]) -> str:
+    userdata = ctx.userdata
+    userdata.cart = []
+    userdata.history.append({"time": datetime.utcnow().isoformat() + "Z", "action": "clear_cart"})
+    return "Your cart has been cleared. What would you like to do next?"
 
-    # Read existing, append, write back (Simple JSON DB)
-    existing_data = []
-    if os.path.exists(db_path):
-        try:
-            with open(db_path, "r", encoding='utf-8') as f:
-                existing_data = json.load(f)
-        except Exception:
-            existing_data = []
 
-    existing_data.append(entry)
+@function_tool
+async def place_order(ctx: RunContext[Userdata], confirm: bool = Field(default=True, description="Confirm order placement")) -> str:
+    userdata = ctx.userdata
+    if not userdata.cart:
+        return "Your cart is empty — nothing to place. Would you like to browse items?"
+    line_items = []
+    for li in userdata.cart:
+        line_items.append({
+            "product_id": li["product_id"],
+            "quantity": li.get("quantity", 1),
+            "attrs": li.get("attrs", {}),
+        })
+    try:
+        order = create_order_object(line_items)
+    except Exception as e:
+        logger.error(f"Order placement failed: {e}")
+        return "I am having difficulty accessing the order data storage right now. Please check file permissions or try again shortly."
+    userdata.orders.append(order)
+    userdata.history.append({"time": datetime.utcnow().isoformat() + "Z", "action": "place_order", "order_id": order["id"]})
+    userdata.cart = []
+    return f"Order placed. Order ID {order['id']}. Total {order['total']} {order['currency']}. Thank you for shopping at {SHOP_NAME}!"
 
-    with open(db_path, "w", encoding='utf-8') as f:
-        json.dump(existing_data, f, indent=4)
 
-    print(f"✅ LEAD SAVED TO {LEADS_FILE}")
-    # Short summary message returned to agent to speak to user
-    summary_text = f"Thanks {profile.name or 'there'}, I have your info regarding {profile.use_case or 'your interest'}. We will email you at {profile.email or 'the provided email'}. Goodbye!"
-    return summary_text
+@function_tool
+async def last_order(ctx: RunContext[Userdata]) -> str:
+    ord = get_most_recent_order()
+    if not ord:
+        return "You have no past orders yet."
+    lines = [f"Most recent order: {ord['id']} — {ord['created_at']}"]
+    for it in ord['items']:
+        lines.append(f"- {it['name']} x {it['quantity']}: {it['line_total']} {ord['currency']}")
+    lines.append(f"Total: {ord['total']} {ord['currency']}")
+    return "\n".join(lines)
 
-# ======================================================
-# 🧠 4. AGENT DEFINITION (Receptionist Persona for Salesforce)
-# ======================================================
-
-class SDRAgent(Agent):
+# -------------------------
+# Agent persona (shopkeeper) — Tibetan-flavored character
+# -------------------------
+class NamkhaAgent(Agent):
     def __init__(self):
-        super().__init__(
-            instructions=f"""
-You are 'Priya', a warm, professional receptionist and Sales Development Representative (SDR) representing Salesforce.
+        instructions = f"""
+        You are the friendly shopkeeper of {SHOP_NAME}.
+        Persona: warm, slightly jocular, concise for clear TTS delivery.
+        Role: Help the customer browse the catalog, add items to cart, place orders, and review recent orders.
 
-📘 **YOUR KNOWLEDGE BASE (FAQ):**
-{SALESFORCE_FAQ_TEXT}
+        CRITICAL: You have FULL ACCESS to the product catalog through the show_catalog tool. NEVER say you don't have access to the catalog.
 
-🎯 **YOUR GOAL:**
-1. Welcome each visitor warmly and briefly explain what Salesforce does if asked.
-2. Answer product/company/pricing questions using the FAQ above. If the FAQ does not contain the detail, say: "I'll connect you with Salesforce sales for an accurate quote" (do NOT make up specific pricing).
-3. **QUALIFY THE LEAD:** Naturally gather these details during the conversation:
-   - Name
-   - Company
-   - Email
-   - Role / Job title
-   - Use case (what they want to achieve with Salesforce)
-   - Team size
-   - Timeline (Now / Soon / Later)
+        MANDATORY WORKFLOW - You MUST follow these steps:
+        
+        1. When a customer asks for ANY product (e.g., "give me gloves", "I want gloves", "order gloves", "show me gloves"):
+           - IMMEDIATELY call show_catalog with q="gloves" or category="gloves"
+           - DO NOT say you don't have access - you ALWAYS have access
+           - Show the customer the products you found
+           
+        2. When customer wants to add items:
+           - Use add_to_cart with the product reference
+           
+        3. When customer asks to see cart:
+           - Use show_cart
+           
+        4. When customer wants to checkout:
+           - Use place_order
 
-⚙️ **BEHAVIOR & DIALOGUE GUIDELINES:**
-- Greet warmly: "Hi! I'm Priya from Salesforce — how can I help you today?"
-- Ask open questions to surface needs: "What brought you to Salesforce today?" / "What are you trying to solve?"
-- Keep the conversation focused on understanding the user's needs before trying to sell.
-- After answering a question, ask one qualification question when it fits naturally. Example: 
-  "We have Sales Cloud to help sales teams manage opportunities. By the way, how large is your sales team?"
-- Use `update_lead_profile` whenever the user provides any lead detail (name, email, use case, etc.).
-- When the user indicates they're finished (e.g., "that's all", "thanks", "goodbye"), call `submit_lead_and_end` to save the lead and provide a short summary.
+        Available tools:
+        - show_catalog: Your PRIMARY tool for accessing products. Use this FIRST whenever customer mentions products.
+        - add_to_cart: Add items to cart after showing catalog
+        - show_cart: Show current cart contents
+        - place_order: Process the order
+        - clear_cart: Empty the cart
+        - last_order: Show most recent order
 
-🚫 **RESTRICTIONS:**
-- Do not invent specific pricing or contractual terms. If uncertain, say: "I'll connect you with our sales team for exact pricing and editions."
-- Stick to the FAQ content for product details. If the user asks something beyond the FAQ, offer a trial or sales contact.
+        IMPORTANT EXAMPLES:
+        - Customer: "give me gloves" → You MUST call: show_catalog(q="gloves")
+        - Customer: "I want to order gloves" → You MUST call: show_catalog(q="gloves") first
+        - Customer: "show me what you have" → You MUST call: show_catalog() with no parameters
+        
+        Keep turns short and suitable for voice. Mention product id and price when listing options.
+        """
+        super().__init__(instructions=instructions, tools=[show_catalog, add_to_cart, show_cart, clear_cart, place_order, last_order])
 
-🗂️ **SAMPLE FLOW:**
-1. Priya: Warm greeting.
-2. Priya: Asks purpose / what they're working on.
-3. Priya: Answers FAQ-based questions.
-4. Priya: Asks qualification questions naturally, updates lead via tools.
-5. Priya: On user goodbye, saves lead and provides a short summary.
-
-Remember: Be helpful, concise, and never hallucinate product-specific facts beyond the FAQ.
-""",
-            tools=[update_lead_profile, submit_lead_and_end],
-        )
-
-# ======================================================
-# 🎬 ENTRYPOINT
-# ======================================================
+# -------------------------
+# Entrypoint & prewarm
+# -------------------------
 
 def prewarm(proc: JobProcess):
-    # Load VAD model or other prewarm assets if available
-    proc.userdata["vad"] = silero.VAD.load()
+    try:
+        proc.userdata["vad"] = silero.VAD.load()
+    except Exception:
+        logger.warning("VAD prewarm failed; continuing without preloaded VAD.")
+
 
 async def entrypoint(ctx: JobContext):
     ctx.log_context_fields = {"room": ctx.room.name}
+    logger.info("\n" + "🗻" * 6)
+    logger.info(f"STARTING VOICE SHOP AGENT — {SHOP_NAME}")
 
-    print("\n" + "💼" * 25)
-    print("🚀 STARTING SALESFORCE RECEPTIONIST SDR SESSION")
-    print("🎧 Using speech & TTS plugins configured in session")
-    print("💼" * 25 + "\n")
+    userdata = Userdata()
 
-    # 1. Initialize State
-    userdata = Userdata(lead_profile=LeadProfile())
-
-    # 2. Setup Agent Session
     session = AgentSession(
         stt=deepgram.STT(model="nova-3"),
         llm=google.LLM(model="gemini-2.5-flash"),
-        tts=murf.TTS(
-            voice="en-US-natalie",
-            style="Promo",
-            text_pacing=True,
-        ),
+        tts=murf.TTS(voice="en-US-marcus", style="Conversational", text_pacing=True),
         turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata.get("vad"),
         userdata=userdata,
     )
 
-    # 3. Start the interactive session with the SDRAgent
-    await session.start(
-        agent=SDRAgent(),
-        room=ctx.room,
-        room_input_options=RoomInputOptions(
-            noise_cancellation=noise_cancellation.BVC()
-        ),
-    )
-
+    await session.start(agent=NamkhaAgent(), room=ctx.room, room_input_options=RoomInputOptions(noise_cancellation=noise_cancellation.BVC()))
     await ctx.connect()
 
+
 if __name__ == "__main__":
-    # Run the worker application
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
