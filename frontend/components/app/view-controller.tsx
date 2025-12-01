@@ -10,7 +10,8 @@ import { WelcomeView } from '@/components/app/welcome-view';
 const MotionWelcomeView = motion.create(WelcomeView);
 const MotionSessionView = motion.create(SessionView);
 
-const VIEW_MOTION_PROPS = {
+// loosen types to avoid motion/react typing mismatch
+const VIEW_MOTION_PROPS: any = {
   variants: {
     visible: {
       opacity: 1,
@@ -33,11 +34,11 @@ export function ViewController() {
   const isSessionActiveRef = useRef(false);
   const { appConfig, isSessionActive, startSession } = useSession();
 
-  // animation handler holds a reference to stale isSessionActive value
+  // keep ref in sync for animation-complete cleanup
   isSessionActiveRef.current = isSessionActive;
 
-  // disconnect room after animation completes
   const handleAnimationComplete = () => {
+    // disconnect the room after the exit animation finishes to avoid abrupt audio cut
     if (!isSessionActiveRef.current && room.state !== 'disconnected') {
       room.disconnect();
     }
@@ -45,22 +46,21 @@ export function ViewController() {
 
   return (
     <AnimatePresence mode="wait">
-      {/* Welcome screen */}
       {!isSessionActive && (
         <MotionWelcomeView
           key="welcome"
-          {...VIEW_MOTION_PROPS}
+          {...(VIEW_MOTION_PROPS as any)}
           startButtonText={appConfig.startButtonText}
           onStartCall={startSession}
         />
       )}
-      {/* Session view */}
+
       {isSessionActive && (
         <MotionSessionView
           key="session-view"
-          {...VIEW_MOTION_PROPS}
+          {...(VIEW_MOTION_PROPS as any)}
           appConfig={appConfig}
-          onAnimationComplete={handleAnimationComplete}
+          onAnimationComplete={handleAnimationComplete as any}
         />
       )}
     </AnimatePresence>
