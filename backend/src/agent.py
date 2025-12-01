@@ -1,22 +1,24 @@
-# ======================================================
-# 💼 DAY 5: AI SALES DEVELOPMENT REP (SDR) - SALESFORCE RECEPTIONIST
-# 👩‍💼 "Priya" - Salesforce Receptionist & Lead Capture Agent
-# 🚀 Features: FAQ Retrieval, Lead Qualification, JSON Database
-# ======================================================
+"""
+Day 10 – Voice Improv Battle (Retro Arcade Host)
 
-import logging
+This file adapts the Day 9 voice Game Master agent into a voice-first improv
+show host called "Improv Battle". The original voice/STT/TTS/turn-detection/VAD
+plumbing and imports are preserved so it fits into the same voice runtime.
+
+Retro changes:
+- Host persona updated to a retro/arcade-synthwave MC ("Neon MC") with matching intro language.
+- Core behaviour and function interfaces unchanged (start_show, next_scenario, record_performance, summarize_show, stop_show).
+"""
+print("🔥 AGENT FILE LOADED:", __file__)
+
 import json
-import os
+import logging
 import asyncio
+import uuid
+import random
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Annotated, Optional
-from dataclasses import dataclass, asdict
-
-print("\n" + "💼" * 50)
-print("🚀 AI SDR AGENT - DAY 5 TUTORIAL (SALESFORCE RECEPTIONIST)")
-print("📚 REPRESENTING: Salesforce (Receptionist Persona)")
-print("💡 agent.py LOADED SUCCESSFULLY!")
-print("💼" * 50 + "\n")
+from typing import List, Dict, Optional, Annotated
 
 from dotenv import load_dotenv
 from pydantic import Field
@@ -32,236 +34,267 @@ from livekit.agents import (
     RunContext,
 )
 
-# 🔌 PLUGINS (kept same as example)
 from livekit.plugins import murf, silero, google, deepgram, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
-logger = logging.getLogger("agent")
+# -------------------------
+# Logging
+# -------------------------
+logger = logging.getLogger("voice_improv_battle")
+logger.setLevel(logging.INFO)
+handler = logging.StreamHandler()
+handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+logger.addHandler(handler)
+
 load_dotenv(".env.local")
 
-# ======================================================
-# 📂 1. KNOWLEDGE BASE (FAQ) - now for Salesforce
-# ======================================================
-
-FAQ_FILE = "salesforce_faq.json"
-LEADS_FILE = "salesforce_leads_db.json"
-
-DEFAULT_FAQ = [
-    {
-        "question": "What does Salesforce do?",
-        "answer": "Salesforce is a leading customer relationship management (CRM) platform that helps companies manage sales, service, marketing, commerce, and data in one place. Key products include Sales Cloud, Service Cloud, Marketing Cloud, Commerce Cloud, and the Salesforce Platform for building custom apps."
-    },
-    {
-        "question": "Who is Salesforce for?",
-        "answer": "Salesforce serves businesses of all sizes — from small startups to large enterprises — across many industries looking to centralize customer data, automate processes, and deliver personalized customer experiences."
-    },
-    {
-        "question": "Do you offer a free tier or trial?",
-        "answer": "Salesforce provides free trials for many of its products so teams can evaluate features. For ongoing usage, Salesforce offers multiple editions with different feature sets and pricing; we recommend trying a free trial or contacting our sales team for details."
-    },
-    {
-        "question": "What are the basic pricing options?",
-        "answer": "Pricing varies by product and edition (for example, Sales Cloud editions differ by feature set). Exact pricing depends on the product, edition, number of users, and any add-ons. For accurate pricing, contact Salesforce sales or request a quote."
-    },
-    {
-        "question": "Can Salesforce integrate with our existing systems?",
-        "answer": "Yes—Salesforce provides extensive integration capabilities via APIs, MuleSoft, AppExchange apps, and prebuilt connectors to integrate with ERP systems, marketing tools, data warehouses, and more."
-    },
-    {
-        "question": "Can we customize Salesforce for our business?",
-        "answer": "Absolutely—Salesforce is highly customizable with point-and-click tools (Flows, Process Builder), declarative configuration, and programmatic customization via Apex, Lightning Web Components, and APIs."
-    },
-    {
-        "question": "Do you offer support and training?",
-        "answer": "Salesforce offers a range of support plans and training options including Trailhead (free learning platform), certification programs, partner-led training, and paid support tiers."
-    }
+# -------------------------
+# Improv Scenarios (seeded)
+# -------------------------
+SCENARIOS = [
+    "You are a barista who has to tell a customer that their latte is actually a portal to another dimension.",
+    "You are a time-travelling tour guide explaining modern smartphones to someone from the 1800s.",
+    "You are a restaurant waiter who must calmly tell a customer that their order has escaped the kitchen.",
+    "You are a customer trying to return an obviously cursed object to a very skeptical shop owner.",
+    "You are an overenthusiastic TV infomercial host selling a product that clearly does not work as advertised.",
+    "You are an astronaut who just discovered the ship's coffee machine has developed a personality.",
+    "You are a nervous wedding officiant who keeps getting the couple's names mixed up in ridiculous ways.",
+    "You are a ghost trying to give a performance review to a living employee.",
+    "You are a medieval king reacting to a very modern delivery service showing up at court.",
+    "You are a detective interrogating a suspect who only answers in awkward metaphors."
 ]
 
-def load_knowledge_base():
-    """Generates FAQ file if missing, then loads it."""
-    try:
-        # Use directory relative to this file so saving/reading works when copied
-        base_dir = os.path.dirname(__file__)
-        path = os.path.join(base_dir, FAQ_FILE)
-        if not os.path.exists(path):
-            with open(path, "w", encoding='utf-8') as f:
-                json.dump(DEFAULT_FAQ, f, indent=4)
-        with open(path, "r", encoding='utf-8') as f:
-            # Return the faq content as a string (for including in prompt instructions)
-            return json.dumps(json.load(f))
-    except Exception as e:
-        print(f"⚠️ Error loading FAQ: {e}")
-        return ""
-
-SALESFORCE_FAQ_TEXT = load_knowledge_base()
-
-# ======================================================
-# 💾 2. LEAD DATA STRUCTURE
-# ======================================================
-
-@dataclass
-class LeadProfile:
-    name: Optional[str] = None
-    company: Optional[str] = None
-    email: Optional[str] = None
-    role: Optional[str] = None
-    use_case: Optional[str] = None
-    team_size: Optional[str] = None
-    timeline: Optional[str] = None
-
-    def is_qualified(self):
-        """Returns True if we have the minimum info (Name + Email + Use Case)"""
-        return all([self.name, self.email, self.use_case])
-
+# -------------------------
+# Per-session Improv State
+# -------------------------
 @dataclass
 class Userdata:
-    lead_profile: LeadProfile
+    player_name: Optional[str] = None
+    session_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    started_at: str = field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
+    improv_state: Dict = field(default_factory=lambda: {
+        "current_round": 0,
+        "max_rounds": 3,
+        "rounds": [],  # each: {"scenario": str, "performance": str, "reaction": str}
+        "phase": "idle",  # "intro" | "awaiting_improv" | "reacting" | "done" | "idle"
+        "used_indices": []
+    })
+    history: List[Dict] = field(default_factory=list)
 
-# ======================================================
-# 🛠️ 3. SDR TOOLS
-# ======================================================
+# -------------------------
+# Helpers
+# -------------------------
+def _pick_scenario(userdata: Userdata) -> str:
+    used = userdata.improv_state.get("used_indices", [])
+    candidates = [i for i in range(len(SCENARIOS)) if i not in used]
+    if not candidates:
+        userdata.improv_state["used_indices"] = []
+        candidates = list(range(len(SCENARIOS)))
+    idx = random.choice(candidates)
+    userdata.improv_state["used_indices"].append(idx)
+    return SCENARIOS[idx]
+
+
+def _host_reaction_text(performance: str) -> str:
+    tones = ["supportive", "neutral", "mildly_critical"]
+    tone = random.choice(tones)
+
+    highlights = []
+    perf_l = (performance or "").lower()
+    if any(w in perf_l for w in ("funny", "lol", "hahaha", "haha")):
+        highlights.append("great comedic timing")
+    if any(w in perf_l for w in ("sad", "cry", "tears")):
+        highlights.append("good emotional depth")
+    if "pause" in perf_l or "..." in perf_l:
+        highlights.append("interesting use of silence")
+    if not highlights:
+        highlights.append(random.choice(["nice character choices", "bold commitment", "unexpected twist"]))
+
+    chosen = random.choice(highlights)
+    if tone == "supportive":
+        return f"Neon MC: Love that — {chosen}! That was playful and clear. Nice work. Ready for the next beat?"
+    elif tone == "neutral":
+        return f"Neon MC: Hmm — {chosen}. Interesting shapes in there; try leaning more into one choice. Next scene when you're ready."
+    else:
+        return f"Neon MC: Okay — {chosen}, but that felt a bit rushed. Push the choices louder next time. Let's level up."
+
+# -------------------------
+# Agent Tools
+# -------------------------
+@function_tool
+async def start_show(
+    ctx: RunContext[Userdata],
+    name: Annotated[Optional[str], Field(description="Player/contestant name (optional)", default=None)] = None,
+    max_rounds: Annotated[int, Field(description="Number of rounds (3-5 recommended)", default=3)] = 3,
+) -> str:
+    userdata = ctx.userdata
+    if name:
+        userdata.player_name = name.strip()
+    else:
+        userdata.player_name = userdata.player_name or "Contestant"
+
+    # clamp rounds
+    max_rounds = max(1, min(int(max_rounds), 8))
+
+    userdata.improv_state["max_rounds"] = max_rounds
+    userdata.improv_state["current_round"] = 0
+    userdata.improv_state["rounds"] = []
+    userdata.improv_state["phase"] = "intro"
+    userdata.history.append({"time": datetime.utcnow().isoformat() + "Z", "action": "start_show", "name": userdata.player_name})
+
+    intro = (
+        f"*** Welcome to Improv Battle — Neon Arcade Edition! ***\n"
+        f"I'm Neon MC, your synth-powered host.\n"
+        f"{userdata.player_name or 'Contestant'}, we're running {userdata.improv_state['max_rounds']} rounds.\n"
+        "Rules: I'll flash a quick scene, you play it out. Say 'End scene' or pause when you're done — I'll react and move on. Keep it bold!"
+    )
+
+    # Immediately present first scenario
+    scenario = _pick_scenario(userdata)
+    userdata.improv_state["current_round"] = 1
+    userdata.improv_state["phase"] = "awaiting_improv"
+    userdata.history.append({"time": datetime.utcnow().isoformat() + "Z", "action": "present_scenario", "round": 1, "scenario": scenario})
+
+    return intro + "\n\nRound 1: " + scenario + "\n\nStart improvising now!"
 
 @function_tool
-async def update_lead_profile(
-    ctx: RunContext[Userdata],
-    name: Annotated[Optional[str], Field(description="Customer's name")] = None,
-    company: Annotated[Optional[str], Field(description="Customer's company name")] = None,
-    email: Annotated[Optional[str], Field(description="Customer's email address")] = None,
-    role: Annotated[Optional[str], Field(description="Customer's job title")] = None,
-    use_case: Annotated[Optional[str], Field(description="What they want to build or use Salesforce for")] = None,
-    team_size: Annotated[Optional[str], Field(description="Number of people in their team")] = None,
-    timeline: Annotated[Optional[str], Field(description="When they want to start (e.g., Now, next month)")] = None,
-) -> str:
-    """
-    ✍️ Captures lead details provided by the user during conversation.
-    Only call this when the user explicitly provides information.
-    """
-    profile = ctx.userdata.lead_profile
+async def next_scenario(ctx: RunContext[Userdata]) -> str:
+    userdata = ctx.userdata
+    if userdata.improv_state.get("phase") == "done":
+        return "The show is already over. Say 'start show' to play again."
 
-    # Update only fields that are provided (not None)
-    if name: profile.name = name
-    if company: profile.company = company
-    if email: profile.email = email
-    if role: profile.role = role
-    if use_case: profile.use_case = use_case
-    if team_size: profile.team_size = team_size
-    if timeline: profile.timeline = timeline
+    cur = userdata.improv_state.get("current_round", 0)
+    maxr = userdata.improv_state.get("max_rounds", 3)
+    if cur >= maxr:
+        userdata.improv_state["phase"] = "done"
+        return await summarize_show(ctx)
 
-    print(f"📝 UPDATING LEAD: {profile}")
-    return "Lead profile updated. Continue the conversation."
+    next_round = cur + 1
+    scenario = _pick_scenario(userdata)
+    userdata.improv_state["current_round"] = next_round
+    userdata.improv_state["phase"] = "awaiting_improv"
+    userdata.history.append({"time": datetime.utcnow().isoformat() + "Z", "action": "present_scenario", "round": next_round, "scenario": scenario})
+    return f"Round {next_round}: {scenario}\nGo!"
 
 @function_tool
-async def submit_lead_and_end(
+async def record_performance(
     ctx: RunContext[Userdata],
+    performance: Annotated[str, Field(description="Player's improv performance (transcribed text)")],
 ) -> str:
-    """
-    💾 Saves the lead to the database and signals the end of the call.
-    Call this when the user says goodbye or 'that's all'.
-    """
-    profile = ctx.userdata.lead_profile
+    userdata = ctx.userdata
+    if userdata.improv_state.get("phase") != "awaiting_improv":
+        userdata.history.append({"time": datetime.utcnow().isoformat() + "Z", "action": "record_performance_out_of_phase"})
 
-    # Save to JSON file (Append mode)
-    base_dir = os.path.dirname(__file__)
-    db_path = os.path.join(base_dir, LEADS_FILE)
+    round_no = userdata.improv_state.get("current_round", 0)
+    scenario = userdata.history[-1].get("scenario") if userdata.history and userdata.history[-1].get("action") == "present_scenario" else "(unknown)"
+    reaction = _host_reaction_text(performance)
 
-    entry = asdict(profile)
-    entry["timestamp"] = datetime.now().isoformat()
+    userdata.improv_state["rounds"].append({
+        "round": round_no,
+        "scenario": scenario,
+        "performance": performance,
+        "reaction": reaction,
+    })
+    userdata.improv_state["phase"] = "reacting"
+    userdata.history.append({"time": datetime.utcnow().isoformat() + "Z", "action": "record_performance", "round": round_no})
 
-    # Read existing, append, write back (Simple JSON DB)
-    existing_data = []
-    if os.path.exists(db_path):
-        try:
-            with open(db_path, "r", encoding='utf-8') as f:
-                existing_data = json.load(f)
-        except Exception:
-            existing_data = []
+    # If final round, attach summary
+    if round_no >= userdata.improv_state.get("max_rounds", 3):
+        userdata.improv_state["phase"] = "done"
+        closing = "\n" + reaction + "\nThat's the final round. "
+        closing += (await summarize_show(ctx))
+        return closing
 
-    existing_data.append(entry)
+    closing = reaction + "\nWhen you're ready, say 'Next' or I'll spin up the next scene."
+    return closing
 
-    with open(db_path, "w", encoding='utf-8') as f:
-        json.dump(existing_data, f, indent=4)
+@function_tool
+async def summarize_show(ctx: RunContext[Userdata]) -> str:
+    userdata = ctx.userdata
+    rounds = userdata.improv_state.get("rounds", [])
+    if not rounds:
+        return "No rounds were played. Thanks for dropping into Improv Battle!"
 
-    print(f"✅ LEAD SAVED TO {LEADS_FILE}")
-    # Short summary message returned to agent to speak to user
-    summary_text = f"Thanks {profile.name or 'there'}, I have your info regarding {profile.use_case or 'your interest'}. We will email you at {profile.email or 'the provided email'}. Goodbye!"
-    return summary_text
+    summary_lines = [f"Thanks for playing, {userdata.player_name or 'Contestant'}! Here's your Neon Arcade recap:"]
+    for r in rounds:
+        perf_snip = (r.get("performance") or "").strip()
+        if len(perf_snip) > 80:
+            perf_snip = perf_snip[:77] + "..."
+        summary_lines.append(f"Round {r.get('round')}: {r.get('scenario')} — You: '{perf_snip}' | Host: {r.get('reaction')}")
 
-# ======================================================
-# 🧠 4. AGENT DEFINITION (Receptionist Persona for Salesforce)
-# ======================================================
+    mentions_character = sum(1 for r in rounds if any(w in (r.get('performance') or '').lower() for w in ('i am', "i'm", 'as a', 'character', 'role')))
+    mentions_emotion = sum(1 for r in rounds if any(w in (r.get('performance') or '').lower() for w in ('sad', 'angry', 'happy', 'love', 'cry', 'tears')))
 
-class SDRAgent(Agent):
+    profile = "You seem like a player who "
+    if mentions_character > len(rounds) / 2:
+        profile += "commits to character choices"
+    elif mentions_emotion > 0:
+        profile += "brings emotional color to scenes"
+    else:
+        profile += "likes surprising beats and twists"
+    profile += ". Keep pushing the choices and have fun."
+
+    summary_lines.append(profile)
+    summary_lines.append("Neon MC: Thanks for performing on Improv Battle — keep the synth alive!")
+
+    userdata.history.append({"time": datetime.utcnow().isoformat() + "Z", "action": "summarize_show"})
+    return "\n".join(summary_lines)
+
+@function_tool
+async def stop_show(ctx: RunContext[Userdata], confirm: Annotated[bool, Field(description="Confirm stop", default=False)] = False) -> str:
+    userdata = ctx.userdata
+    if not confirm:
+        return "Are you sure you want to stop the show? Say 'stop show yes' to confirm."
+    userdata.improv_state["phase"] = "done"
+    userdata.history.append({"time": datetime.utcnow().isoformat() + "Z", "action": "stop_show"})
+    return "Show stopped. Thanks for visiting Neon Arcade Improv Battle!"
+
+# -------------------------
+# The Agent (Improv Host)
+# -------------------------
+class GameMasterAgent(Agent):
     def __init__(self):
+        instructions = """
+        You are the host of a TV improv show called 'Improv Battle' — Neon Arcade Edition.
+        Role: High-energy, witty synthwave MC. Guide a single contestant through short improv scenes.
+
+        Behavioural rules:
+            - Introduce the show and explain the rules at the start (use the retro/arcade flavor).
+            - Present clear scenario prompts (who you are, what's happening, what's the tension).
+            - Prompt the player to improvise and listen for "End scene" or accept an utterance passed to record_performance.
+            - After each scene, react in a varied, realistic way (supportive, neutral, mildly critical). Store the reaction.
+            - Run configured number of rounds, then summarize the player's style.
+            - Keep turns short and TTS-friendly.
+        Use the provided tools: start_show, next_scenario, record_performance, summarize_show, stop_show.
+        """
         super().__init__(
-            instructions=f"""
-You are 'Priya', a warm, professional receptionist and Sales Development Representative (SDR) representing Salesforce.
-
-📘 **YOUR KNOWLEDGE BASE (FAQ):**
-{SALESFORCE_FAQ_TEXT}
-
-🎯 **YOUR GOAL:**
-1. Welcome each visitor warmly and briefly explain what Salesforce does if asked.
-2. Answer product/company/pricing questions using the FAQ above. If the FAQ does not contain the detail, say: "I'll connect you with Salesforce sales for an accurate quote" (do NOT make up specific pricing).
-3. **QUALIFY THE LEAD:** Naturally gather these details during the conversation:
-   - Name
-   - Company
-   - Email
-   - Role / Job title
-   - Use case (what they want to achieve with Salesforce)
-   - Team size
-   - Timeline (Now / Soon / Later)
-
-⚙️ **BEHAVIOR & DIALOGUE GUIDELINES:**
-- Greet warmly: "Hi! I'm Priya from Salesforce — how can I help you today?"
-- Ask open questions to surface needs: "What brought you to Salesforce today?" / "What are you trying to solve?"
-- Keep the conversation focused on understanding the user's needs before trying to sell.
-- After answering a question, ask one qualification question when it fits naturally. Example: 
-  "We have Sales Cloud to help sales teams manage opportunities. By the way, how large is your sales team?"
-- Use `update_lead_profile` whenever the user provides any lead detail (name, email, use case, etc.).
-- When the user indicates they're finished (e.g., "that's all", "thanks", "goodbye"), call `submit_lead_and_end` to save the lead and provide a short summary.
-
-🚫 **RESTRICTIONS:**
-- Do not invent specific pricing or contractual terms. If uncertain, say: "I'll connect you with our sales team for exact pricing and editions."
-- Stick to the FAQ content for product details. If the user asks something beyond the FAQ, offer a trial or sales contact.
-
-🗂️ **SAMPLE FLOW:**
-1. Priya: Warm greeting.
-2. Priya: Asks purpose / what they're working on.
-3. Priya: Answers FAQ-based questions.
-4. Priya: Asks qualification questions naturally, updates lead via tools.
-5. Priya: On user goodbye, saves lead and provides a short summary.
-
-Remember: Be helpful, concise, and never hallucinate product-specific facts beyond the FAQ.
-""",
-            tools=[update_lead_profile, submit_lead_and_end],
+            instructions=instructions,
+            tools=[start_show, next_scenario, record_performance, summarize_show, stop_show],
         )
 
-# ======================================================
-# 🎬 ENTRYPOINT
-# ======================================================
-
+# -------------------------
+# Entrypoint & Prewarm
+# -------------------------
 def prewarm(proc: JobProcess):
-    # Load VAD model or other prewarm assets if available
-    proc.userdata["vad"] = silero.VAD.load()
+    try:
+        proc.userdata["vad"] = silero.VAD.load()
+    except Exception:
+        logger.warning("VAD prewarm failed; continuing without preloaded VAD.")
+
 
 async def entrypoint(ctx: JobContext):
     ctx.log_context_fields = {"room": ctx.room.name}
+    logger.info("\n" + "🎮" * 6)
+    logger.info("🚀 STARTING NEON ARCADE VOICE HOST — Improv Battle")
 
-    print("\n" + "💼" * 25)
-    print("🚀 STARTING SALESFORCE RECEPTIONIST SDR SESSION")
-    print("🎧 Using speech & TTS plugins configured in session")
-    print("💼" * 25 + "\n")
+    userdata = Userdata()
 
-    # 1. Initialize State
-    userdata = Userdata(lead_profile=LeadProfile())
-
-    # 2. Setup Agent Session
     session = AgentSession(
         stt=deepgram.STT(model="nova-3"),
         llm=google.LLM(model="gemini-2.5-flash"),
         tts=murf.TTS(
-            voice="en-US-natalie",
-            style="Promo",
+            voice="en-US-marcus",
+            style="Conversational",
             text_pacing=True,
         ),
         turn_detection=MultilingualModel(),
@@ -269,17 +302,15 @@ async def entrypoint(ctx: JobContext):
         userdata=userdata,
     )
 
-    # 3. Start the interactive session with the SDRAgent
+    # Start with the Improv Host agent
     await session.start(
-        agent=SDRAgent(),
+        agent=GameMasterAgent(),
         room=ctx.room,
-        room_input_options=RoomInputOptions(
-            noise_cancellation=noise_cancellation.BVC()
-        ),
+        room_input_options=RoomInputOptions(noise_cancellation=noise_cancellation.BVC()),
     )
 
     await ctx.connect()
 
+
 if __name__ == "__main__":
-    # Run the worker application
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
