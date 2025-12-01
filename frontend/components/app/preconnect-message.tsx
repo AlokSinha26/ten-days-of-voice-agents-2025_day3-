@@ -7,7 +7,8 @@ import { cn } from '@/lib/utils';
 
 const MotionMessage = motion.create('p');
 
-const VIEW_MOTION_PROPS = {
+// Cast to `any` to avoid strict motion/react type errors in some versions
+const VIEW_MOTION_PROPS: any = {
   variants: {
     visible: {
       opacity: 1,
@@ -45,8 +46,8 @@ export function PreConnectMessage({ className, messages = [] }: PreConnectMessag
           aria-hidden={messages.length > 0}
           className={cn('pointer-events-none text-center', className)}
         >
-          <ShimmerText className="text-sm font-semibold">
-            Agent is listening, ask it a question
+          <ShimmerText className="text-sm font-semibold neon-text">
+            Neon MC is tuning the synth — show us your talent!
           </ShimmerText>
         </MotionMessage>
       )}
